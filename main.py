@@ -28,8 +28,13 @@ if sys.version_info < REQUIRED_PY:
 # 本地設定檔（改為與此 Python 檔同目錄）
 # --------------------------------
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
+# 在打包後使用 exe 目錄，開發時使用原檔案目錄
+if getattr(sys, "frozen", False):
+    APP_DIR = os.path.dirname(sys.executable)
+else:
+    APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
 CONFIG_PATH = os.path.join(APP_DIR, "line_config.json")
-# 同目錄必然存在，無需 os.makedirs()
 
 # --------------------------------
 # 參數（預設值，可於 GUI 覆寫）
