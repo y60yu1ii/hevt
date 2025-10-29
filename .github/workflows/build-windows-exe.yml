@@ -1,6 +1,7 @@
 name: build-windows-exe
 
 on:
+  # 手動觸發
   workflow_dispatch:
     inputs:
       include_config:
@@ -11,10 +12,26 @@ on:
         description: "Python version"
         required: false
         default: "3.11"
+  # 自動在 push 時觸發（main 分支；限相關檔案異動）
+  push:
+    branches: [main]
+    paths:
+      - "main.py"
+      - "packaging/**"
+      - "requirements.txt"
+      - ".github/workflows/build-windows-exe.yml"
+      - "line_config.json"
 
 jobs:
   build:
     runs-on: windows-latest
+    # 避免同一分支重覆建置
+    concurrency:
+      group: build-windows-exe-${{ github.ref }}
+      cancel-in-progress: true
+
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
@@ -23,21 +40,37 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
+          # push 情境沒有 inputs，這裡用 || 給預設
           python-version: ${{ inputs.python_version || '3.11' }}
           cache: "pip"
 
       - name: Show env
+        shell: pwsh
         run: |
           python --version
           pip --version
-          dir
-          if (Test-Path packaging) { dir packaging }
+          Get-Location
+          Write-Host "`nRepo root listing:"
+          Get-ChildItem -Force
+          if (Test-Path packaging) {
+            Write-Host "`npackaging listing:"
+            Get-ChildItem -Force packaging
+          }
 
       - name: Install dependencies
+        shell: pwsh
         run: |
           python -m pip install --upgrade pip
           if (Test-Path requirements.txt) { pip install -r requirements.txt }
           pip install pyinstaller==6.16.0
+
+      - name: Guard — main.py must exist
+        shell: pwsh
+        run: |
+          if (!(Test-Path "main.py")) {
+            Write-Error "main.py not found at repo root."
+            exit 1
+          }
 
       - name: Ensure spec exists (auto-generate if missing)
         shell: pwsh
@@ -52,25 +85,35 @@ jobs:
             if (Test-Path dist)  { Remove-Item -Recurse -Force dist }
           }
 
-      - name: Show spec target
+      - name: Show spec (first lines)
         shell: pwsh
         run: |
-          Get-Content packaging\pyinstaller.spec | Select-Object -First 40
+          Get-Content packaging\pyinstaller.spec | Select-Object -First 60
 
       - name: Build EXE
-        run: pyinstaller --noconfirm packaging/pyinstaller.spec
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm packaging/pyinstaller.spec
+          if (!(Test-Path "dist\HEVT")) {
+            Write-Error "Build completed but dist\HEVT not found."
+            exit 1
+          }
 
       - name: (Optional) Copy line_config.json next to EXE
         if: ${{ inputs.include_config == 'true' }}
         shell: pwsh
         run: |
           if (Test-Path ".\line_config.json") {
-            if (Test-Path ".\dist\HEVT") { Copy-Item ".\line_config.json" ".\dist\HEVT\" -Force }
+            Copy-Item ".\line_config.json" ".\dist\HEVT\" -Force
+          } else {
+            Write-Host "line_config.json not found. Skipping copy."
           }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: HEVT-win-x64
-          path: dist/HEVT/**
-          if-no-files-found: error
+          path: |
+            dist/HEVT.exe
+            dist/HEVT/**
+          if-no-files-found: warn
