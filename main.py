@@ -361,26 +361,6 @@ def push_to_all_targets(text: str):
     for t in targets:
         _line_push(token, t, text)
 
-def send_line_test_popup():
-    if not line_enable_var.get():
-        messagebox.showwarning("LINE", "請先勾選 Enable LINE Alert")
-        return
-    if not line_token_var.get().strip():
-        messagebox.showwarning("LINE", "請先填入 Channel Access Token（或從檔案載入）")
-        return
-    if not (line_group_var.get().strip() or line_user_var.get().strip()):
-        messagebox.showwarning("LINE", "請先填入 Group ID 或 User ID 任一")
-        return
-    stats = {
-        "max": 38.5, "min": 26.2, "avg": 33.0,
-        "max_slope": 1.5, "avg_slope": 0.8,
-        "over": 3, "diff_area": 42,
-        "avgT": 0.0, "maxSlopeT": 0.0, "diffAreaT": 0.0,
-        "now": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    }
-    text = "[TEST] " + format_line_text(line_tpl_var.get(), stats)
-    push_to_all_targets(text)
-    messagebox.showinfo("LINE", "已嘗試送出測試訊息（請到對應聊天查看）。")
 
 def maybe_send_line_alarm(max_val: float, avg_val: float, diff_area: int, alarm_now: int):
     """在 NORMAL→OVER 或冷卻期屆滿時觸發推送（對 group 與 user 同時）"""
@@ -593,6 +573,75 @@ def udp_img_thread():
         except Exception as e:
             print("[IMG RECV ERR]", e)
             time.sleep(0.1)
+def _line_push(token: str, to_id: str, text: str):
+    """呼叫 LINE Push，to_id 可為 U*/R*/C*；回傳 (ok, status, body)。"""
+    if not token or not to_id:
+        return (False, 0, "missing token or to_id")
+    url = "https://api.line.me/v2/bot/message/push"
+    headers = {"Authorization": f"Bearer {token.strip()}", "Content-Type": "application/json"}
+    payload = {"to": to_id.strip(), "messages": [{"type": "text", "text": text}]}
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=8)
+        ok = r.status_code < 300
+        if not ok:
+            print("[LINE] push FAIL", r.status_code, r.text)
+        return (ok, r.status_code, r.text)
+    except Exception as e:
+        print("[LINE] push ERROR", e)
+        return (False, -1, str(e))
+
+
+def push_to_all_targets(text: str):
+    token = line_token_var.get().strip()
+    targets = []
+    g = line_group_var.get().strip()
+    u = line_user_var.get().strip()
+    if g:
+        targets.append(("Group/Room", g))
+    if u:
+        targets.append(("User", u))
+    if not targets:
+        return [("None", False, 0, "no target id")]
+    results = []
+    for label, t in targets:
+        ok, status, body = _line_push(token, t, text)
+        results.append((label, ok, status, body))
+    return results
+
+
+def send_line_test_popup():
+    if not line_enable_var.get():
+        messagebox.showwarning("LINE", "請先勾選 Enable LINE Alert")
+        return
+    if not line_token_var.get().strip():
+        messagebox.showwarning("LINE", "請先填入 Channel Access Token（或從檔案載入）")
+        return
+    if not (line_group_var.get().strip() or line_user_var.get().strip()):
+        messagebox.showwarning("LINE", "請先填入 Group ID 或 User ID 任一")
+        return
+
+    stats = {
+        "max": 38.5, "min": 26.2, "avg": 33.0,
+        "max_slope": 1.5, "avg_slope": 0.8,
+        "over": 3, "diff_area": 42,
+        "avgT": 0.0, "maxSlopeT": 0.0, "diffAreaT": 0.0,
+        "now": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    text = "[TEST] " + format_line_text(line_tpl_var.get(), stats)
+
+    results = push_to_all_targets(text)
+
+    lines = []
+    success_any = False
+    for label, ok, status, body in results:
+        success_any = success_any or ok
+        lines.append(f"{label}: {'OK' if ok else 'FAIL'} (status={status})\n{body[:400]}")
+    msg = "\n\n".join(lines)
+
+    if success_any:
+        messagebox.showinfo("LINE Push Result", msg)
+    else:
+        messagebox.showerror("LINE Push Failed", msg)
 
 # --------------------------------
 # 控制：Start/Connect
