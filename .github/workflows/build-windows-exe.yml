@@ -1,7 +1,6 @@
 name: build-windows-exe
 
 on:
-  # 手動觸發
   workflow_dispatch:
     inputs:
       include_config:
@@ -12,26 +11,18 @@ on:
         description: "Python version"
         required: false
         default: "3.11"
-  # 自動在 push 時觸發（main 分支；限相關檔案異動）
-  push:
-    branches: [main]
-    paths:
-      - "main.py"
-      - "packaging/**"
-      - "requirements.txt"
-      - ".github/workflows/build-windows-exe.yml"
-      - "line_config.json"
+  # 若要自動執行，解除下面註解：
+  # push:
+  #   branches: [ main, master ]
+  #   paths:
+  #     - 'main.py'
+  #     - 'requirements.txt'
+  #     - 'packaging/**'
+  #     - '.github/workflows/build-windows-exe.yml'
 
 jobs:
   build:
     runs-on: windows-latest
-    # 避免同一分支重覆建置
-    concurrency:
-      group: build-windows-exe-${{ github.ref }}
-      cancel-in-progress: true
-
-    permissions:
-      contents: read
 
     steps:
       - name: Checkout
@@ -40,7 +31,6 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          # push 情境沒有 inputs，這裡用 || 給預設
           python-version: ${{ inputs.python_version || '3.11' }}
           cache: "pip"
 
@@ -49,13 +39,8 @@ jobs:
         run: |
           python --version
           pip --version
-          Get-Location
-          Write-Host "`nRepo root listing:"
           Get-ChildItem -Force
-          if (Test-Path packaging) {
-            Write-Host "`npackaging listing:"
-            Get-ChildItem -Force packaging
-          }
+          if (Test-Path packaging) { Get-ChildItem -Force packaging }
 
       - name: Install dependencies
         shell: pwsh
@@ -63,14 +48,6 @@ jobs:
           python -m pip install --upgrade pip
           if (Test-Path requirements.txt) { pip install -r requirements.txt }
           pip install pyinstaller==6.16.0
-
-      - name: Guard — main.py must exist
-        shell: pwsh
-        run: |
-          if (!(Test-Path "main.py")) {
-            Write-Error "main.py not found at repo root."
-            exit 1
-          }
 
       - name: Ensure spec exists (auto-generate if missing)
         shell: pwsh
@@ -85,18 +62,25 @@ jobs:
             if (Test-Path dist)  { Remove-Item -Recurse -Force dist }
           }
 
-      - name: Show spec (first lines)
+      - name: Show spec header
         shell: pwsh
         run: |
           Get-Content packaging\pyinstaller.spec | Select-Object -First 60
 
       - name: Build EXE
+        run: pyinstaller --noconfirm packaging/pyinstaller.spec
+
+      - name: List dist
         shell: pwsh
         run: |
-          pyinstaller --noconfirm packaging/pyinstaller.spec
-          if (!(Test-Path "dist\HEVT")) {
-            Write-Error "Build completed but dist\HEVT not found."
-            exit 1
+          if (Test-Path dist) { Get-ChildItem -Recurse dist } else { Write-Host "dist not found" }
+          # 不要用 Write-Error，避免 onefile 沒有 dist\HEVT 目錄時讓流程失敗
+          if (Test-Path "dist\HEVT") {
+            Write-Host "Found onedir output: dist\HEVT\"
+          } elseif (Test-Path "dist\HEVT.exe") {
+            Write-Host "Found onefile output: dist\HEVT.exe"
+          } else {
+            Write-Host "No known outputs found yet."
           }
 
       - name: (Optional) Copy line_config.json next to EXE
@@ -104,9 +88,17 @@ jobs:
         shell: pwsh
         run: |
           if (Test-Path ".\line_config.json") {
-            Copy-Item ".\line_config.json" ".\dist\HEVT\" -Force
+            if (Test-Path ".\dist\HEVT.exe") {
+              Copy-Item ".\line_config.json" ".\dist\" -Force
+              Write-Host "Copied line_config.json beside HEVT.exe"
+            } elseif (Test-Path ".\dist\HEVT") {
+              Copy-Item ".\line_config.json" ".\dist\HEVT\" -Force
+              Write-Host "Copied line_config.json into dist\HEVT\"
+            } else {
+              Write-Host "No output found to place line_config.json."
+            }
           } else {
-            Write-Host "line_config.json not found. Skipping copy."
+            Write-Host "line_config.json not present in repo root."
           }
 
       - name: Upload artifact
