@@ -1,18 +1,21 @@
-name: Build Windows EXE
+name: build-windows-exe
 
 on:
-  push:
-    branches: [ main, master ]
-    paths:
-      - '**.py'
-      - 'requirements.txt'
-      - 'packaging/**'
-      - '.github/workflows/build-windows-exe.yml'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      include_config:
+        description: "Copy line_config.json into dist"
+        required: false
+        default: "false"
+      python_version:
+        description: "Python version"
+        required: false
+        default: "3.11"
 
 jobs:
-  build-windows:
+  build:
     runs-on: windows-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -20,22 +23,54 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ inputs.python_version || '3.11' }}
+          cache: "pip"
 
-      - name: Install deps
+      - name: Show env
+        run: |
+          python --version
+          pip --version
+          dir
+          if (Test-Path packaging) { dir packaging }
+
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+          if (Test-Path requirements.txt) { pip install -r requirements.txt }
+          pip install pyinstaller==6.16.0
 
-      - name: Build with PyInstaller (spec)
+      - name: Ensure spec exists (auto-generate if missing)
+        shell: pwsh
         run: |
-          pyinstaller --noconfirm packaging/pyinstaller.spec
+          if (!(Test-Path "packaging\pyinstaller.spec")) {
+            Write-Host "Spec not found. Creating from main.py..."
+            pyinstaller --onefile --noconfirm --name HEVT main.py
+            New-Item -ItemType Directory -Force -Path packaging | Out-Null
+            Move-Item -Force ".\HEVT.spec" ".\packaging\pyinstaller.spec"
+            # 清乾淨暫存
+            if (Test-Path build) { Remove-Item -Recurse -Force build }
+            if (Test-Path dist)  { Remove-Item -Recurse -Force dist }
+          }
+
+      - name: Show spec target
+        shell: pwsh
+        run: |
+          Get-Content packaging\pyinstaller.spec | Select-Object -First 40
+
+      - name: Build EXE
+        run: pyinstaller --noconfirm packaging/pyinstaller.spec
+
+      - name: (Optional) Copy line_config.json next to EXE
+        if: ${{ inputs.include_config == 'true' }}
+        shell: pwsh
+        run: |
+          if (Test-Path ".\line_config.json") {
+            if (Test-Path ".\dist\HEVT") { Copy-Item ".\line_config.json" ".\dist\HEVT\" -Force }
+          }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: STM32-Thermal-Monitor-windows
-          path: |
-            dist/**
-
+          name: HEVT-win-x64
+          path: dist/HEVT/**
+          if-no-files-found: error
